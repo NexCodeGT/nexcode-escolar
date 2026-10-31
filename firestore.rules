@@ -1,0 +1,125 @@
+rules_version = '2';
+
+// Reglas de seguridad del Sistema Escolar (varios colegios en una sola base de datos)
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Funciones de ayuda ----------
+    function autenticado() {
+      return request.auth != null;
+    }
+    // Superadministrador: dueño del sistema, puede crear y suspender colegios
+    function esSuper() {
+      return autenticado() && request.auth.uid == 'f026tw3GhORUDBUV6E6ERuup4Rn2';
+    }
+    function tienePerfil() {
+      return autenticado() && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid));
+    }
+    function perfil() {
+      return get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data;
+    }
+    function colegioActivo(c) {
+      return get(/databases/$(database)/documents/colegios/$(c)).data.activo == true;
+    }
+    // Pertenece al colegio, su usuario está activo y el colegio está activo
+    function miembro(c) {
+      return tienePerfil() && perfil().activo == true && perfil().colegioId == c && colegioActivo(c);
+    }
+    // Personal administrativo del colegio
+    function adminDe(c) {
+      return miembro(c) && perfil().rol == 'admin';
+    }
+    function esAutor(d) {
+      return d.autorId == request.auth.uid;
+    }
+    // El maestro tiene asignado el curso de esa tarea o examen
+    function maestroDelCurso(c, d) {
+      return 'cursoId' in d && d.cursoId is string && d.cursoId != ''
+        && get(/databases/$(database)/documents/colegios/$(c)/cursos/$(d.cursoId)).data.maestroId == request.auth.uid;
+    }
+
+    // ---------- Perfiles de usuario ----------
+    match /usuarios/{uid} {
+      // Cada quien lee su perfil; el personal lee los perfiles de su mismo colegio
+      allow read: if esSuper()
+        || (autenticado() && request.auth.uid == uid)
+        || (tienePerfil() && perfil().activo == true && resource.data.colegioId == perfil().colegioId);
+
+      // La administración de un colegio crea cuentas solo para su colegio y solo con roles permitidos
+      allow create: if esSuper()
+        || (adminDe(request.resource.data.colegioId)
+            && request.resource.data.rol in ['admin', 'maestro']);
+
+      // No puede mover a nadie a otro colegio ni modificar su propio perfil (evita quitarse el acceso por error)
+      allow update: if esSuper()
+        || (adminDe(resource.data.colegioId)
+            && uid != request.auth.uid
+            && request.resource.data.colegioId == resource.data.colegioId
+            && request.resource.data.rol in ['admin', 'maestro']);
+
+      allow delete: if esSuper()
+        || (adminDe(resource.data.colegioId) && uid != request.auth.uid);
+    }
+
+    // ---------- Colegios ----------
+    match /colegios/{c} {
+      // El personal puede leer el documento de su colegio aunque esté suspendido,
+      // para que la página pueda mostrar el aviso de "servicio suspendido"
+      allow read: if esSuper() || (tienePerfil() && perfil().colegioId == c);
+      allow write: if esSuper();
+
+      // Configuración: encabezado, cuotas, unidades, plantilla de avisos
+      match /config/{doc} {
+        allow read: if esSuper() || miembro(c);
+        allow write: if esSuper() || adminDe(c);
+      }
+
+      // Datos que solo modifica la administración y que todo el personal puede leer
+      match /grados/{id} {
+        allow read: if esSuper() || miembro(c);
+        allow write: if esSuper() || adminDe(c);
+      }
+      match /cursos/{id} {
+        allow read: if esSuper() || miembro(c);
+        allow write: if esSuper() || adminDe(c);
+      }
+      match /alumnos/{id} {
+        allow read: if esSuper() || miembro(c);
+        allow write: if esSuper() || adminDe(c);
+      }
+
+      // Pagos: solo la administración de ese colegio
+      match /pagos/{id} {
+        allow read, write: if esSuper() || adminDe(c);
+      }
+
+      // Asistencia: cualquier miembro la toma; solo la administración la borra
+      match /asistencia/{id} {
+        allow read, create, update: if esSuper() || miembro(c);
+        allow delete: if esSuper() || adminDe(c);
+      }
+
+      // Tareas y exámenes: el maestro crea a su nombre; edita el autor o el maestro del curso
+      match /tareas/{id} {
+        allow read: if esSuper() || miembro(c);
+        allow create: if esSuper() || (miembro(c) && esAutor(request.resource.data));
+        allow update: if esSuper() || adminDe(c)
+          || (miembro(c)
+              && request.resource.data.autorId == resource.data.autorId
+              && (esAutor(resource.data) || maestroDelCurso(c, resource.data)));
+        allow delete: if esSuper() || adminDe(c) || (miembro(c) && esAutor(resource.data));
+      }
+      match /examenes/{id} {
+        allow read: if esSuper() || miembro(c);
+        allow create: if esSuper() || (miembro(c) && esAutor(request.resource.data));
+        allow update: if esSuper() || adminDe(c)
+          || (miembro(c)
+              && request.resource.data.autorId == resource.data.autorId
+              && (esAutor(resource.data) || maestroDelCurso(c, resource.data)));
+        allow delete: if esSuper() || adminDe(c) || (miembro(c) && esAutor(resource.data));
+      }
+    }
+
+    // Todo lo que no esté indicado arriba queda bloqueado por defecto.
+  }
+}
