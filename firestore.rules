@@ -51,7 +51,10 @@ service cloud.firestore {
             && request.resource.data.rol in ['admin', 'maestro']);
 
       // No puede mover a nadie a otro colegio ni modificar su propio perfil (evita quitarse el acceso por error)
+      // Cada usuario solo puede actualizar su propia fecha de último ingreso
       allow update: if esSuper()
+        || (autenticado() && request.auth.uid == uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ultimoAcceso']))
         || (adminDe(resource.data.colegioId)
             && uid != request.auth.uid
             && request.resource.data.colegioId == resource.data.colegioId

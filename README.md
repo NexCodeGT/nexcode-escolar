@@ -24,3 +24,10 @@ La página necesita abrirse con un servidor local; con doble clic sobre el archi
 ## Publicar
 
 Sube la carpeta a un repositorio privado de GitHub y conéctalo a Netlify (sin comando de compilación; carpeta de publicación: la raíz del repositorio).
+
+## Respaldos
+
+- **Superadministrador:** en la pantalla Colegios, botón *Respaldar* (un colegio) o *Respaldar todos* (un solo archivo). La columna *Respaldo* avisa si pasaron más de 7 días.
+- **Administración de cada colegio:** Configuración → *Descargar respaldo*.
+- **Restaurar:** solo el superadministrador, con *Restaurar respaldo*. Vuelve a crear lo borrado y reemplaza lo existente con la versión del respaldo; no borra lo creado después. Las cuentas de inicio de sesión (Authentication) no forman parte del respaldo.
+- Guarda los archivos en al menos dos lugares (por ejemplo, tu computadora y Google Drive).
