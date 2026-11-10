@@ -1,128 +1,131 @@
 rules_version = '2';
 
-// Reglas de seguridad del Sistema Escolar (varios colegios en una sola base de datos)
+// Reglas de Firestore - Sistema escolar NexCode
+// IMPORTANTE: cambia TU_SUPER_UID por el mismo valor de SUPER_UID que tienes en firebase-config.js
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
     // ---------- Funciones de ayuda ----------
-    function autenticado() {
-      return request.auth != null;
-    }
-    // Superadministrador: dueño del sistema, puede crear y suspender colegios
-    function esSuper() {
-      return autenticado() && request.auth.uid == 'f026tw3GhORUDBUV6E6ERuup4Rn2';
-    }
-    function tienePerfil() {
-      return autenticado() && exists(/databases/$(database)/documents/usuarios/$(request.auth.uid));
-    }
-    function perfil() {
-      return get(/databases/$(database)/documents/usuarios/$(request.auth.uid)).data;
-    }
-    function colegioActivo(c) {
-      return get(/databases/$(database)/documents/colegios/$(c)).data.activo == true;
-    }
-    // Pertenece al colegio, su usuario está activo y el colegio está activo
-    function miembro(c) {
-      return tienePerfil() && perfil().activo == true && perfil().colegioId == c && colegioActivo(c);
-    }
-    // Personal administrativo del colegio
-    function adminDe(c) {
-      return miembro(c) && perfil().rol == 'admin';
-    }
-    function esAutor(d) {
-      return d.autorId == request.auth.uid;
-    }
-    // El maestro tiene asignado el curso de esa tarea o examen
-    function maestroDelCurso(c, d) {
-      return 'cursoId' in d && d.cursoId is string && d.cursoId != ''
-        && get(/databases/$(database)/documents/colegios/$(c)/cursos/$(d.cursoId)).data.maestroId == request.auth.uid;
-    }
+    function conSesion() { return request.auth != null; }
+    function esSuper() { return conSesion() && request.auth.uid == 'TU_SUPER_UID'; }
+    function rutaPerfil() { return /databases/$(database)/documents/usuarios/$(request.auth.uid); }
+    function tienePerfil() { return conSesion() && exists(rutaPerfil()); }
+    function perfil() { return get(rutaPerfil()).data; }
+    function colegioActivo(cid) { return get(/databases/$(database)/documents/colegios/$(cid)).data.activo == true; }
 
-    // ---------- Perfiles de usuario ----------
+    // Usuario activo del colegio, con el servicio del colegio activo
+    function miembro(cid) {
+      return tienePerfil() && perfil().colegioId == cid && perfil().activo == true && colegioActivo(cid);
+    }
+    function admin(cid)    { return esSuper() || (miembro(cid) && perfil().rol == 'admin'); }
+    function personal(cid) { return esSuper() || (miembro(cid) && perfil().rol in ['admin', 'maestro']); }
+    function alumno(cid) {
+      return miembro(cid) && perfil().rol == 'alumno'
+        && get(/databases/$(database)/documents/colegios/$(cid)).data.portalAlumnos == true;
+    }
+    function miAlumnoId() { return perfil().alumnoId; }
+
+    // ---------- Usuarios ----------
     match /usuarios/{uid} {
-      // Cada quien lee su perfil; el personal lee los perfiles de su mismo colegio
       allow read: if esSuper()
-        || (autenticado() && request.auth.uid == uid)
-        || (tienePerfil() && perfil().activo == true && resource.data.colegioId == perfil().colegioId);
+        || (conSesion() && request.auth.uid == uid)
+        || (tienePerfil() && resource.data.colegioId == perfil().colegioId && perfil().rol in ['admin', 'maestro'] && perfil().activo == true);
 
-      // La administración de un colegio crea cuentas solo para su colegio y solo con roles permitidos
+      // La administración crea cuentas solo de su propio colegio
       allow create: if esSuper()
-        || (adminDe(request.resource.data.colegioId)
-            && request.resource.data.rol in ['admin', 'maestro']);
+        || (admin(request.resource.data.colegioId)
+            && request.resource.data.rol in ['admin', 'maestro', 'alumno']);
 
-      // No puede mover a nadie a otro colegio ni modificar su propio perfil (evita quitarse el acceso por error)
-      // Cada usuario solo puede actualizar su propia fecha de último ingreso
       allow update: if esSuper()
-        || (autenticado() && request.auth.uid == uid
-            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ultimoAcceso']))
-        || (adminDe(resource.data.colegioId)
-            && uid != request.auth.uid
+        || (admin(resource.data.colegioId)
             && request.resource.data.colegioId == resource.data.colegioId
-            && request.resource.data.rol in ['admin', 'maestro']);
+            && request.resource.data.rol in ['admin', 'maestro', 'alumno'])
+        // Cada quien solo puede actualizar su hora de último acceso
+        || (conSesion() && request.auth.uid == uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['ultimoAcceso']));
 
-      allow delete: if esSuper()
-        || (adminDe(resource.data.colegioId) && uid != request.auth.uid);
+      allow delete: if esSuper();
     }
 
     // ---------- Colegios ----------
-    match /colegios/{c} {
-      // El personal puede leer el documento de su colegio aunque esté suspendido,
-      // para que la página pueda mostrar el aviso de "servicio suspendido"
-      allow read: if esSuper() || (tienePerfil() && perfil().colegioId == c);
+    match /colegios/{cid} {
+      // Cualquier usuario del colegio puede leerlo (aunque esté suspendido, para mostrar el aviso)
+      allow read: if esSuper() || (tienePerfil() && perfil().colegioId == cid);
       allow write: if esSuper();
 
-      // Configuración: encabezado, cuotas, unidades, plantilla de avisos
-      match /config/{doc} {
-        allow read: if esSuper() || miembro(c);
-        allow write: if esSuper() || adminDe(c);
+      match /config/{id} {
+        allow read: if esSuper() || miembro(cid);
+        allow write: if admin(cid);
       }
-
-      // Datos que solo modifica la administración y que todo el personal puede leer
       match /grados/{id} {
-        allow read: if esSuper() || miembro(c);
-        allow write: if esSuper() || adminDe(c);
+        allow read: if esSuper() || miembro(cid);
+        allow write: if admin(cid);
       }
       match /cursos/{id} {
-        allow read: if esSuper() || miembro(c);
-        allow write: if esSuper() || adminDe(c);
+        allow read: if personal(cid);
+        allow write: if admin(cid);
       }
       match /alumnos/{id} {
-        allow read: if esSuper() || miembro(c);
-        allow write: if esSuper() || adminDe(c);
+        allow read: if personal(cid) || (alumno(cid) && id == miAlumnoId());
+        allow write: if admin(cid);
       }
-
-      // Pagos: solo la administración de ese colegio
       match /pagos/{id} {
-        allow read, write: if esSuper() || adminDe(c);
+        allow read, write: if admin(cid);
       }
-
-      // Asistencia: cualquier miembro la toma; solo la administración la borra
       match /asistencia/{id} {
-        allow read, create, update: if esSuper() || miembro(c);
-        allow delete: if esSuper() || adminDe(c);
+        allow read, write: if personal(cid);
       }
-
-      // Tareas y exámenes: el maestro crea a su nombre; edita el autor o el maestro del curso
       match /tareas/{id} {
-        allow read: if esSuper() || miembro(c);
-        allow create: if esSuper() || (miembro(c) && esAutor(request.resource.data));
-        allow update: if esSuper() || adminDe(c)
-          || (miembro(c)
-              && request.resource.data.autorId == resource.data.autorId
-              && (esAutor(resource.data) || maestroDelCurso(c, resource.data)));
-        allow delete: if esSuper() || adminDe(c) || (miembro(c) && esAutor(resource.data));
+        allow read, write: if personal(cid);
       }
       match /examenes/{id} {
-        allow read: if esSuper() || miembro(c);
-        allow create: if esSuper() || (miembro(c) && esAutor(request.resource.data));
-        allow update: if esSuper() || adminDe(c)
-          || (miembro(c)
-              && request.resource.data.autorId == resource.data.autorId
-              && (esAutor(resource.data) || maestroDelCurso(c, resource.data)));
-        allow delete: if esSuper() || adminDe(c) || (miembro(c) && esAutor(resource.data));
+        allow read, write: if personal(cid);
+      }
+
+      // Copia de la tarea SIN notas: es lo único de las tareas que el alumno puede leer
+      match /tareasAlumnos/{id} {
+        allow read: if personal(cid) || alumno(cid);
+        allow write: if personal(cid);
+      }
+
+      // Notas publicadas: un documento por alumno, solo con SUS notas (id = alumnoId)
+      match /notasAlumnos/{aid} {
+        allow read: if personal(cid) || (alumno(cid) && aid == miAlumnoId());
+        allow write: if admin(cid);
+      }
+
+      // Entregas en línea: id = tareaId_alumnoId
+      match /entregas/{id} {
+        allow read: if personal(cid)
+          || (alumno(cid) && resource.data.alumnoId == miAlumnoId());
+
+        // El maestro o la administración: escribe la nota (calif)
+        allow create, update: if personal(cid);
+
+        // El alumno: solo su propia entrega, sin tocar la nota, y solo si aún no está calificada
+        allow create: if alumno(cid)
+          && request.resource.data.alumnoId == miAlumnoId()
+          && id == request.resource.data.tareaId + '_' + miAlumnoId()
+          && !('calif' in request.resource.data)
+          && request.resource.data.keys().hasOnly(['tareaId', 'alumnoId', 'gradoId', 'cursoId', 'anio', 'texto', 'enlace', 'archivo', 'enviada', 'tarde', 'uid'])
+          && request.resource.data.texto is string && request.resource.data.texto.size() <= 5000
+          && request.resource.data.enlace is string && request.resource.data.enlace.size() <= 1000;
+
+        allow update: if alumno(cid)
+          && resource.data.alumnoId == miAlumnoId()
+          && request.resource.data.alumnoId == miAlumnoId()
+          && request.resource.data.tareaId == resource.data.tareaId
+          && (!('calif' in resource.data) || resource.data.calif == null)
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['calif'])
+          && request.resource.data.keys().hasOnly(['tareaId', 'alumnoId', 'gradoId', 'cursoId', 'anio', 'texto', 'enlace', 'archivo', 'enviada', 'tarde', 'uid', 'calif'])
+          && request.resource.data.texto is string && request.resource.data.texto.size() <= 5000
+          && request.resource.data.enlace is string && request.resource.data.enlace.size() <= 1000;
+
+        allow delete: if personal(cid)
+          || (alumno(cid) && resource.data.alumnoId == miAlumnoId()
+              && (!('calif' in resource.data) || resource.data.calif == null));
       }
     }
-
-    // Todo lo que no esté indicado arriba queda bloqueado por defecto.
   }
 }

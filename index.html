@@ -462,7 +462,7 @@ const entregaDe=(tid,aid)=>S.entregas.find(x=>x.tareaId===tid&&x.alumnoId===aid)
 /* Copia de la tarea sin notas: es lo único que el alumno puede leer */
 function copiaAlumno(id,t){
   return{titulo:t.titulo||'',descripcion:t.descripcion||'',fechaEntrega:t.fechaEntrega||'',punteo:t.punteo??'',gradoId:t.gradoId||'',cursoId:t.cursoId||'',
-    cursoNombre:cursoNom(t),unidad:Number(t.unidad)||1,anio:Number(t.anio)||+S.config.ciclo.anio,maestro:nombreDe(t.autorId,t.maestro||''),creada:t.creada||Date.now(),actualizada:Date.now()};
+    cursoNombre:cursoNom(t),unidad:Number(t.unidad)||1,anio:Number(t.anio)||+S.config.ciclo.anio,maestro:nombreDe(t.autorId,t.maestro||''),material:t.material||null,creada:t.creada||Date.now(),actualizada:Date.now()};
 }
 async function publicarCopia(id,t){if(!portalOn())return;await Store.set('tareasAlumnos',id,copiaAlumno(id,t))}
 let sincronizando=false;
@@ -502,10 +502,10 @@ const S={
   config:mergeCfg(null),grados:[],cursos:[],alumnos:[],alScopes:{},tareas:[],examenes:[],pagos:{},usuarios:[],asis:[],asisHoy:[],
   asisFecha:hoyISO(),asisGrado:'',asisDraft:null,f:{estado:'activos',soloMias:true},cGrado:'',
   examDraft:null,cfgDraft:null,sel:new Set(),modal:null,printJob:null,
-  seenTareas:null,t0:Date.now(),entregas:[],seenEnt:null,miAlumno:null,tareasAl:[],misEntregas:[]
+  seenTareas:null,t0:Date.now(),entregas:[],seenEnt:null,miAlumno:null,tareasAl:[],misEntregas:[],misNotas:undefined
 };
 function resetDatos(){
-  Object.assign(S,{config:mergeCfg(null),grados:[],cursos:[],alumnos:[],alScopes:{},tareas:[],examenes:[],pagos:{},usuarios:[],asis:[],asisHoy:[],entregas:[],seenEnt:null,miAlumno:null,tareasAl:[],misEntregas:[],
+  Object.assign(S,{config:mergeCfg(null),grados:[],cursos:[],alumnos:[],alScopes:{},tareas:[],examenes:[],pagos:{},usuarios:[],asis:[],asisHoy:[],entregas:[],seenEnt:null,miAlumno:null,tareasAl:[],misEntregas:[],misNotas:undefined,
     asisGrado:'',asisDraft:null,f:{estado:'activos',soloMias:true},cGrado:'',examDraft:null,cfgDraft:null,sel:new Set(),seenTareas:null,t0:Date.now()});
 }
 const VIEWS=[
@@ -518,7 +518,8 @@ const VIEWS=[
   {id:'pagos',t:'Pagos',roles:['admin']},
   {id:'usuarios',t:'Usuarios',roles:['admin']},
   {id:'config',t:'Configuración',roles:['admin']},
-  {id:'misTareas',t:'Mis tareas',roles:['alumno']}
+  {id:'misTareas',t:'Mis tareas',roles:['alumno']},
+  {id:'misNotas',t:'Mis notas',roles:['alumno']}
 ];
 const ROL_TXT={admin:'Administración',maestro:'Maestro',alumno:'Alumno',super:'Superadministrador'};
 const esAdmin=()=>S.me.rol==='admin'||S.me.rol==='super';
@@ -690,8 +691,8 @@ function render(){
   if(S.view==='bloqueo'){V.innerHTML=vBloqueo();return}
   if(!S.cid){V.innerHTML=S.me.rol==='super'?vSuper():'';return}
   const ok=VIEWS.find(v=>v.id===S.view);
-  if((ok&&!ok.roles.includes(rolVista()))||(!ok&&S.view!=='examEditor')||(esAlumno()&&S.view!=='misTareas')){S.view=vistaInicial();renderNav()}
-  const F={panel:vPanel,inscripciones:vInscripciones,asistencia:vAsistencia,tareas:vTareas,examenes:vExamenes,examEditor:vExamEditor,notas:vNotas,pagos:vPagos,usuarios:vUsuarios,config:vConfig,misTareas:vMisTareas}[S.view]||vPanel;
+  if((ok&&!ok.roles.includes(rolVista()))||(!ok&&S.view!=='examEditor')||(esAlumno()&&!['misTareas','misNotas'].includes(S.view))){S.view=vistaInicial();renderNav()}
+  const F={panel:vPanel,inscripciones:vInscripciones,asistencia:vAsistencia,tareas:vTareas,examenes:vExamenes,examEditor:vExamEditor,notas:vNotas,pagos:vPagos,usuarios:vUsuarios,config:vConfig,misTareas:vMisTareas,misNotas:vMisNotas}[S.view]||vPanel;
   V.innerHTML=F();
 }
 function renderKeep(id){
@@ -755,7 +756,7 @@ async function cargarResumen(){
   S.resumenCargando=false;scheduleRender();
 }
 /* ======== Respaldos ======== */
-const COLS_RESPALDO=['config','grados','cursos','alumnos','pagos','asistencia','tareas','examenes','tareasAlumnos','entregas'];
+const COLS_RESPALDO=['config','grados','cursos','alumnos','pagos','asistencia','tareas','examenes','tareasAlumnos','entregas','notasAlumnos'];
 const idValido=x=>typeof x==='string'&&/^[A-Za-z0-9_.~:@+-]{1,200}$/.test(x)&&x!=='.'&&x!=='..';
 const sinId=o=>{const x={...o};delete x.id;return x};
 async function armarRespaldo(cid){
@@ -1024,8 +1025,8 @@ function formColegio(id){
   <p class="note">Si desactivas el servicio, el personal del colegio no podrá entrar, pero no se borra ningún dato.</p>
   <h3 style="font-size:15px;margin-top:6px">Funciones adicionales</h3>
   <label class="ck"><input type="checkbox" name="portalAlumnos" ${c.portalAlumnos?'checked':''}> Portal de alumnos: los alumnos entran y entregan tareas en línea</label>
-  <label class="ck"><input type="checkbox" name="archivosAlumnos" ${c.archivosAlumnos?'checked':''}> Permitir que los alumnos suban archivos (fotos, PDF, Word)</label>
-  <p class="note">Sin archivos, el alumno entrega escribiendo su respuesta o pegando un enlace (Google Drive, OneDrive). Subir archivos usa Firebase Storage, que necesita el plan Blaze del proyecto.</p>`,
+  <label class="ck"><input type="checkbox" name="archivosAlumnos" ${c.archivosAlumnos?'checked':''}> Subida de archivos a la nube: alumnos entregan archivos y maestros suben material (requiere plan Blaze)</label>
+  <p class="note">Sin la nube, alumnos y maestros comparten archivos con enlaces (Google Drive, OneDrive). Subir archivos usa Firebase Storage, que necesita el plan Blaze del proyecto.</p>`,
   onSave:async(d,form)=>{const cur={...c};delete cur.id;const portal=form.elements.portalAlumnos.checked;await escribir(FB.set(['colegios',id],{...cur,nombre:(d.nombre||'').trim()||c.nombre,plan:d.plan,notas:d.notas,activo:form.elements.activo.checked,portalAlumnos:portal,archivosAlumnos:portal&&form.elements.archivosAlumnos.checked}));toast('Colegio actualizado')}});
 }
 
@@ -1131,17 +1132,56 @@ function formTarea(id){
     <label class="f">Valor en la unidad (puntos)<input type="number" name="punteo" min="0" step="0.5" value="${h(t.punteo??'')}"></label>
     <label class="f span2">Fecha de entrega<input type="date" name="fechaEntrega" value="${h(t.fechaEntrega||'')}"></label>
   </div>
-  <label class="f">Instrucciones<textarea name="descripcion" rows="4">${h(t.descripcion||'')}</textarea></label>`,
+  <label class="f">Instrucciones<textarea name="descripcion" rows="4">${h(t.descripcion||'')}</textarea></label>
+  ${camposMaterial(t.material)}`,
   foot:id?`<button type="button" class="btn danger grow" data-act="tareaBorrar" data-id="${id}">Eliminar tarea</button>`:'',
-  onSave:async d=>{
+  onSave:async(d,form)=>{
     if(!d.titulo.trim()){toast('Escribe el título de la tarea.',true);return false}
     if(!d.cursoId){toast('Elige el curso. Si no aparece, pide que lo creen en Cursos.',true);return false}
     const nid=id||uid();
-    const data={...(id?t:{entregas:{},creada:Date.now(),autorId:S.me.id}),...d,titulo:d.titulo.trim(),anio:t.anio||+S.config.ciclo.anio,unidad:Number(d.unidad),punteo:d.punteo?Number(d.punteo):'',actualizada:Date.now(),pubV:portalOn()?1:0};
+    const material=await leerMaterial(form,t.material,`colegios/${S.cid}/material/${nid}`);if(material===false)return false;
+    delete d.matArchivo;delete d.quitarMat;delete d.matEnlace;
+    const data={...(id?t:{entregas:{},creada:Date.now(),autorId:S.me.id}),...d,material,titulo:d.titulo.trim(),anio:t.anio||+S.config.ciclo.anio,unidad:Number(d.unidad),punteo:d.punteo?Number(d.punteo):'',actualizada:Date.now(),pubV:portalOn()?1:0};
     await Store.set('tareas',nid,data);
     try{await publicarCopia(nid,data)}catch(e){console.error(e);toast('La tarea se guardó, pero no se pudo publicar para los alumnos. Revisa las reglas de Firebase.',true);return}
     toast(id?'Tarea actualizada':'Tarea publicada');
   }});
+}
+/* ======== Material de apoyo del maestro (enlace, y archivo si la nube está activa) ======== */
+function camposMaterial(m){
+  m=m||{};const conArch=archivosOn();
+  return`<h3 style="font-size:15px;margin-top:6px">Material de apoyo (opcional)</h3>
+  <label class="f">Enlace (Google Drive, YouTube, página web)<input name="matEnlace" type="url" value="${h(m.enlace||'')}" placeholder="https://drive.google.com/…"></label>
+  ${conArch?`<div>${m.archivo&&m.archivo.url?`<div class="adj" style="margin-bottom:8px"><span><a href="${h(m.archivo.url)}" target="_blank" rel="noopener">${h(m.archivo.nombre)}</a> <small class="muted">${tamTxt(m.archivo.tam)}</small></span><label class="ck"><input type="checkbox" name="quitarMat"> Quitar</label></div>`:''}
+    <p class="note" style="margin-bottom:6px">Archivo: PDF, Word, Excel, PowerPoint o imagen, hasta 10 MB.${m.archivo&&m.archivo.url?' Si eliges otro, reemplaza al actual.':''}</p>
+    <input type="file" name="matArchivo" accept="${TIPOS_ARCHIVO}" aria-label="Archivo de material"></div>
+    <div class="upbar" id="matBar" hidden><i></i></div>`:`<p class="note">${portalOn()?'Los alumnos verán este enlace al abrir la tarea.':'Queda guardado con la tarea.'}</p>`}`;
+}
+/* Devuelve {enlace,archivo} o null; false si hay un error que impide guardar */
+async function leerMaterial(form,prev,carpeta){
+  prev=prev||{};const E=form.elements;
+  const enlace=String((E.matEnlace&&E.matEnlace.value)||'').trim();
+  if(enlace&&!enlaceOk(enlace)){toast('El enlace del material no es válido. Cópialo completo, empezando con https://',true);return false}
+  let archivo=prev.archivo||null;
+  let file=archivosOn()&&E.matArchivo&&E.matArchivo.files[0];
+  if(E.quitarMat&&E.quitarMat.checked&&!file)archivo=null;
+  if(file){
+    file=await comprimirImagen(file);
+    if(file.size>MAX_ARCHIVO){toast(`El archivo pesa ${tamTxt(file.size)}. El máximo es 10 MB.`,true);return false}
+    const bar=$('#matBar');if(bar)bar.hidden=false;
+    const limpio=slug(file.name.replace(/\.[^.]+$/,'')).slice(0,60)+(file.name.match(/\.[a-z0-9]+$/i)||[''])[0].toLowerCase();
+    const ruta=`${carpeta}/${Date.now()}_${limpio}`;
+    try{const url=await FB.subir(ruta,file,p=>{const i=bar&&bar.querySelector('i');if(i)i.style.width=Math.round(p*100)+'%'});archivo={nombre:file.name,url,ruta,tipo:file.type||'',tam:file.size}}
+    catch(err){console.error(err);if(bar)bar.hidden=true;toast('No se pudo subir el archivo. Revisa tu internet e intenta de nuevo.',true);return false}
+  }
+  if(prev.archivo&&prev.archivo.ruta&&(!archivo||archivo.ruta!==prev.archivo.ruta))FB.borrarArchivo(prev.archivo.ruta);
+  return enlace||archivo?{enlace,archivo}:null;
+}
+function htmlMaterial(m,titulo){
+  if(!m||(!m.enlace&&!(m.archivo&&m.archivo.url)))return'';
+  return`<div style="display:grid;gap:6px"><b style="font-size:14px">${titulo||'Material de apoyo'}</b>
+  ${m.enlace?`<div class="adj"><span class="muted" style="overflow-wrap:anywhere">${h(m.enlace.length>60?m.enlace.slice(0,57)+'…':m.enlace)}</span><a href="${h(m.enlace)}" target="_blank" rel="noopener">Abrir enlace</a></div>`:''}
+  ${m.archivo&&m.archivo.url?`<div class="adj"><span>${h(m.archivo.nombre)} <small class="muted">${tamTxt(m.archivo.tam)}</small></span><a href="${h(m.archivo.url)}" target="_blank" rel="noopener">Abrir archivo</a></div>`:''}</div>`;
 }
 /* Lo que el alumno entregó en línea, para mostrarlo al maestro */
 function detalleEntrega(x){
@@ -1163,6 +1203,7 @@ function formEntregas(id){
   openModal({kind:'entregas',title:t.titulo,save:puede?'Guardar entregas y notas':null,body:`
   <p class="note">${h(cursoNom(t))} en ${h(gradoTxt(t.gradoId))}${t.unidad?`, unidad ${ROM[t.unidad-1]}`:''}. Entrega: ${fechaLarga(t.fechaEntrega)}. Valor: ${h(t.punteo||'sin punteo')} puntos.</p>
   ${t.descripcion?`<div class="box">${hb(t.descripcion)}</div>`:''}
+  ${htmlMaterial(t.material)}
   ${pl?`<p class="note" id="entResumen">${nLinea} de ${al.length} alumnos entregaron en línea. La lista se actualiza sola. Las notas que guardes aquí las ve cada alumno en su portal.</p>`:''}
   ${al.length?`${puede?`<div class="bar" style="margin:0"><button type="button" class="btn ghost sm" data-act="entTodos">Marcar todos como entregado</button></div>`:''}
   <table class="tbl"><thead><tr><th>Alumno</th>${pl?'<th>En línea</th>':''}<th>Entregó</th><th class="r">Nota</th></tr></thead><tbody>
@@ -1238,7 +1279,7 @@ function vMisTareas(){
   </div>
   ${!list.length?empty(S.tareasAl.length?(fe==='pendientes'?'No tienes tareas pendientes. ¡Bien hecho!':'No hay tareas con estos filtros.'):'Tus maestros todavía no han publicado tareas.'):
   `<div class="tcards">${list.map(({t,e})=>`<div class="tcard st-${e.k}"><div style="min-width:0;flex:1 1 260px">
-    <h3>${h(t.titulo)}</h3>
+    <h3>${h(t.titulo)}${t.material?' <span class="tag info">Con material</span>':''}</h3>
     <div class="meta">${h(t.cursoNombre||'')}${t.maestro?`, ${h(t.maestro)}`:''}. Entrega: ${fechaLarga(t.fechaEntrega)}${t.punteo?`. Vale ${h(t.punteo)} puntos`:''}.</div></div>
     <div class="der"><span class="tag ${e.tag}">${e.txt}</span>
     <button class="btn ${e.k==='pend'||e.k==='bad'?'':'ghost'} sm" data-act="miEntrega" data-id="${t.id}">${e.k==='pend'||e.k==='bad'?'Entregar':e.k==='ok'?'Ver o cambiar':'Ver'}</button></div></div>`).join('')}</div>`}`;
@@ -1260,6 +1301,7 @@ function formEntregaAlumno(tid){
   openModal({title:t.titulo,save:cerrada?null:(x.enviada?'Guardar cambios':'Entregar tarea'),body:`
   <p class="note">${h(t.cursoNombre||'')}${t.maestro?`, ${h(t.maestro)}`:''}. Entrega: ${fechaLarga(t.fechaEntrega)}.${t.punteo?` Vale ${h(t.punteo)} puntos.`:''}</p>
   ${t.descripcion?`<div class="box"><b>Instrucciones</b><br>${hb(t.descripcion)}</div>`:''}
+  ${htmlMaterial(t.material,'Material de tu maestro')}
   ${cerrada?`<div class="infobox" style="margin:0"><p><b>Tu nota: ${fmt(x.calif.n)} de ${h(t.punteo||'–')} puntos.</b></p><p>La tarea ya fue calificada y no se puede cambiar.</p></div>${x.enviada?`<p class="note">Lo que entregaste el ${fechaLarga(isoDe(new Date(x.enviada)))}:</p>${enviado}`:''}`:`
   ${x.enviada?`<div class="infobox" style="margin:0"><p>Entregaste el ${fechaLarga(isoDe(new Date(x.enviada)))} a las ${horaDe(x.enviada)}. Puedes cambiar tu entrega mientras no esté calificada.</p></div>`:''}
   ${tarde?`<div class="warnbox" style="margin:0">La fecha de entrega ya pasó. Puedes entregar, pero tu maestro la verá como entrega tarde.</div>`:''}
@@ -1422,12 +1464,76 @@ function vNotas(){
   }
   return`
   <div class="vh"><div><h1>Notas</h1><p class="sub">La nota de cada unidad es acumulativa: suma lo obtenido en tareas y exámenes, sobre 100 puntos.</p></div>
-  <div class="acts"><button class="btn ghost" data-act="cuadroImprimir" ${cs.length&&al.length?'':'disabled'}>Imprimir cuadro</button>${esAdmin()?`<button class="btn" data-act="boletasGrado" ${al.length?'':'disabled'}>Imprimir boletas del grado</button>`:''}</div></div>
+  <div class="acts">${esAdmin()&&portalOn()?`<button class="btn ghost" data-act="notasPublicar" title="${S.config.notas.portalFecha?'Última publicación: '+fechaCorta(isoDe(new Date(S.config.notas.portalFecha))):'Aún no se han publicado'}">Publicar en el portal</button>`:''}<button class="btn ghost" data-act="cuadroImprimir" ${cs.length&&al.length?'':'disabled'}>Imprimir cuadro</button>${esAdmin()?`<button class="btn" data-act="boletasGrado" ${al.length?'':'disabled'}>Imprimir boletas del grado</button>`:''}</div></div>
   <div class="bar">
     <select data-filter="nGrado" aria-label="Grado">${gs.length?optsGrados(g,null,gs):'<option>Sin grados</option>'}</select>
     <select data-filter="nCurso" aria-label="Curso">${cs.length?optsCursos(g,c):'<option>Sin cursos</option>'}</select>
     <select data-filter="nUnidad" aria-label="Unidad">${optsUnidad(u,'Todas las unidades')}</select>
   </div>${cuerpo}`;
+}
+/* ======== Publicar notas en el portal de alumnos ======== */
+/* Cada alumno recibe un documento solo con SUS notas (notasAlumnos/{alumnoId}) */
+function formPublicarNotas(){
+  needTareas();needExamenes();
+  const n=+S.config.notas.unidades||4,act=+S.config.notas.actual||1;
+  const prev=S.config.notas.portalUnidades;const sel=Array.isArray(prev)&&prev.length?prev:Array.from({length:act},(_,i)=>i+1);
+  const gs=S.grados.filter(g=>alumnosDe(g.id).length);
+  const fecha=S.config.notas.portalFecha;
+  openModal({title:'Publicar notas en el portal',save:'Publicar notas',body:`
+  <p class="note">Cada alumno verá solo sus propias notas, por curso y por unidad, con el detalle de tareas y exámenes. Las notas no se actualizan solas: cuando registren notas nuevas, vuelvan a publicar.${fecha?` Última publicación: ${fechaLarga(isoDe(new Date(fecha)))} a las ${horaDe(fecha)}.`:''}</p>
+  <h3 style="font-size:15px">Unidades que pueden ver</h3>
+  <div class="acts">${Array.from({length:n},(_,i)=>`<label class="ck"><input type="checkbox" name="u_${i+1}" ${sel.includes(i+1)?'checked':''}> Unidad ${ROM[i]}</label>`).join('')}</div>
+  <h3 style="font-size:15px;margin-top:6px">Grados</h3>
+  ${gs.length?`<label class="ck"><input type="checkbox" data-todos-grados checked> <b>Todos los grados</b></label>
+  <div class="grid2">${gs.map(g=>`<label class="ck"><input type="checkbox" name="g_${g.id}" checked> ${h(gradoTxt(g.id))}</label>`).join('')}</div>`:'<p class="note">No hay grados con alumnos inscritos.</p>'}
+  <p class="note">Para ocultar una unidad, quítale la marca y vuelve a publicar.</p>`,
+  onSave:async(d,form)=>{
+    const us=Array.from({length:n},(_,i)=>i+1).filter(u=>form.elements['u_'+u].checked);
+    const gIds=gs.filter(g=>form.elements['g_'+g.id]&&form.elements['g_'+g.id].checked).map(g=>g.id);
+    if(!gIds.length){toast('Elige al menos un grado.',true);return false}
+    const items=[],ahora=Date.now(),anio=+S.config.ciclo.anio,min=+S.config.notas.minima||60;
+    gIds.forEach(g=>{
+      const cs=S.cursos.filter(c=>c.gradoId===g).sort((x,y)=>(x.orden||0)-(y.orden||0));
+      const acts={};cs.forEach(c=>us.forEach(u=>acts[c.id+'|'+u]=actividades(c.id,u)));
+      alumnosDe(g).forEach(a=>{
+        const cursos=cs.map(c=>({id:c.id,nombre:c.nombre||'',maestro:c.maestroId?nombreDe(c.maestroId,''):'',
+          unidades:us.map(u=>{const ac=acts[c.id+'|'+u];return{u,nota:notaUnidad(a.id,c.id,u,ac),acts:ac.map(x=>({tipo:x.tipo,titulo:x.titulo||'',valor:x.valor,nota:x.nota(a.id)}))}})}));
+        items.push([['colegios',S.cid,'notasAlumnos',a.id],{alumnoId:a.id,gradoId:g,anio,unidades:us,totalUnidades:n,minima:min,cursos,publicado:ahora,porId:S.me.id}]);
+      });
+    });
+    await FB.batchSet(items);
+    await escribir(FB.update(['colegios',S.cid,'config','general'],{'notas.portalUnidades':us,'notas.portalFecha':ahora}));
+    toast(`Notas publicadas para ${items.length} ${items.length===1?'alumno':'alumnos'}`);
+  }});
+}
+function needMisNotas(){
+  if(!S.cid||!esAlumno())return;
+  needQ('misNotas','x',()=>FB.sub(['colegios',S.cid,'notasAlumnos',S.me.alumnoId],[],d=>{S.misNotas=d[0]||null;scheduleRender()},()=>{S.misNotas=null;scheduleRender()}));
+}
+function vMisNotas(){
+  needMisTareas();needMisNotas();
+  const al=S.miAlumno,N=S.misNotas;
+  const cab=`<div class="vh"><div><h1>Mis notas</h1><p class="sub">${al?`${h(nomAlN(al))}, ${h(gradoTxt(al.gradoId))}. `:''}Ciclo ${S.config.ciclo.anio}.</p></div></div>`;
+  if(N===undefined||!al)return cab+`<p class="muted">Cargando tus notas…</p>`;
+  if(!N||+N.anio!==+S.config.ciclo.anio||!(N.unidades||[]).length)return cab+empty('Tus notas todavía no han sido publicadas. Mientras tanto, puedes ver la nota de cada tarea en Mis tareas.');
+  const us=N.unidades,min=+N.minima||60;
+  const cel=x=>x==null?'<span class="muted">–</span>':fmt(x);
+  let sumP=0,cP=0;
+  const filas=(N.cursos||[]).map(c=>{
+    const v=c.unidades.map(x=>x.nota).filter(x=>x!=null);const prom=v.length?Math.round(v.reduce((a,b)=>a+b,0)/v.length*10)/10:null;
+    if(prom!=null){sumP+=prom;cP++}
+    return{c,prom};
+  });
+  return cab+`
+  <div class="tw"><table class="tbl cuadro"><thead><tr><th>Curso</th>${us.map(u=>`<th class="n">Unidad ${ROM[u-1]}</th>`).join('')}<th class="n">Promedio</th></tr></thead><tbody>
+  ${filas.map(({c,prom})=>`<tr><td><b>${h(c.nombre)}</b>${c.maestro?`<div class="muted" style="font-size:13px">${h(c.maestro)}</div>`:''}</td>${c.unidades.map(x=>`<td class="n ${x.nota!=null&&x.nota<min?'low':''}">${cel(x.nota)}</td>`).join('')}<td class="n tot ${prom!=null&&prom<min?'low':''}">${prom==null?'':fmt(prom)}</td></tr>`).join('')}
+  </tbody>${cP?`<tfoot><tr><td><b>Promedio general</b></td>${us.map(()=>'<td></td>').join('')}<td class="n tot">${fmt(Math.round(sumP/cP*10)/10)}</td></tr></tfoot>`:''}</table></div>
+  <p class="note" style="margin-top:8px">Nota mínima para aprobar: ${min} puntos. Publicadas el ${fechaLarga(isoDe(new Date(N.publicado)))}. Si falta una nota, consulta con tu maestro.</p>
+  <div class="sec-h" style="margin-top:20px"><h2>Detalle por curso</h2></div>
+  <div class="tcards">${(N.cursos||[]).map(c=>`<details class="tcard" style="display:block"><summary style="cursor:pointer"><b>${h(c.nombre)}</b></summary>
+    ${c.unidades.map(x=>`<div style="margin-top:10px"><b style="font-size:14px">Unidad ${ROM[x.u-1]}: ${x.nota==null?'sin notas aún':fmt(x.nota)+' puntos'}</b>
+      ${x.acts.length?`<table class="tbl" style="margin-top:4px"><tbody>${x.acts.map(a=>`<tr><td>${h(a.titulo)} <span class="muted" style="font-size:13px">${a.tipo==='examen'?'Examen':'Tarea'}</span></td><td class="r nowrap">${a.nota==null?'<span class="muted">Sin nota</span>':fmt(a.nota)} de ${fmt(a.valor)}</td></tr>`).join('')}</tbody></table>`:'<p class="note">Sin actividades en esta unidad.</p>'}</div>`).join('')}
+  </details>`).join('')}</div>`;
 }
 function htmlCuadro(){
   const g=S.f.nGrado,c=S.f.nCurso,u=+S.f.nUnidad,al=alumnosDe(g),cur=cursoDe(c)||{};const n=+S.config.notas.unidades||4;
@@ -1773,13 +1879,14 @@ const ACT={
   tareaNueva:()=>formTarea(),
   tareaEditar:d=>formTarea(d.id),
   tareaBorrar:async d=>{if(!await confirmar('¿Eliminar esta tarea y sus notas?'+(portalOn()?' También se borran las entregas en línea de los alumnos.':''),'Eliminar'))return;
-    try{await Store.del('tareas',d.id);
+    try{const tb=S.tareas.find(x=>x.id===d.id);await Store.del('tareas',d.id);if(tb&&tb.material&&tb.material.archivo&&tb.material.archivo.ruta)FB.borrarArchivo(tb.material.archivo.ruta);
       if(portalOn()){await Store.del('tareasAlumnos',d.id).catch(console.error);
         for(const x of S.entregas.filter(y=>y.tareaId===d.id)){if(x.archivo&&x.archivo.ruta)FB.borrarArchivo(x.archivo.ruta);await Store.del('entregas',x.id).catch(console.error)}}
       closeModal();toast('Tarea eliminada')}catch(e){toast(msgErr(e),true)}},
   tareaCalificar:d=>formEntregas(d.id),
   entTodos:()=>dlg.querySelectorAll('input[type=checkbox][name^="e_"]').forEach(c=>{c.checked=true;c.dataset.tocado=1}),
   miEntrega:d=>formEntregaAlumno(d.id),
+  notasPublicar:()=>formPublicarNotas(),
   miEntregaQuitar:async d=>{const x=miEntrega(d.id);if(!x)return;if(!await confirmar('¿Quitar tu entrega? Tu maestro ya no la verá.','Quitar entrega'))return;
     try{if(x.archivo&&x.archivo.ruta)await FB.borrarArchivo(x.archivo.ruta);await Store.del('entregas',x.id);closeModal();toast('Entrega quitada')}catch(e){toast(msgErr(e),true)}},
   accesoAlumnoCrear:d=>formAccesoAlumno(d.id),
@@ -1867,6 +1974,7 @@ document.addEventListener('change',async e=>{
     else toast('Logo cargado. No tiene un color definido; puedes elegir el color a mano.');
     render()}catch(err){toast('No se pudo leer la imagen. Prueba con PNG o JPG.',true)}return}
   if(t.name&&/^e_/.test(t.name)&&dlg.contains(t)){t.dataset.tocado=1;return}
+  if(t.hasAttribute('data-todos-grados')){dlg.querySelectorAll('input[name^="g_"]').forEach(c=>c.checked=t.checked);return}
 });
 
 /* ================= Sesión e inicio ================= */
